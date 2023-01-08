@@ -1,0 +1,94 @@
+# version: "3.6"
+version: "2.2"
+services:
+  db:
+    image: postgis/postgis
+    env_file: .env
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+    ports:
+      - "5488:5432"
+    expose:
+      - 5488
+
+  redis:
+    image: redis:alpine
+    restart: on-failure
+    expose:
+      - 6379
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-h", "localhost", "ping" ]
+      interval: 1m
+      timeout: 5s
+      retries: 2
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/python/Dockerfile
+    env_file: .env
+    stdin_open: true
+    tty: true
+    expose:
+      - 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/backend
+    depends_on:
+      - db
+      - redis
+      - celery
+      - flower
+      - nginx
+#      - dozzle
+    working_dir: /backend
+    command: python server/runserver.py
+
+  dozzle:
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "10000:8080"
+
+  celery:
+    image: backend
+    restart: on-failure
+    env_file: .env
+    healthcheck:
+      test: [ "CMD-SHELL", "ps ax", "|" ,"grep -v grep", "|" ,"grep celery",  "||", "exit 1" ]
+      interval: 1m
+      timeout: 5s
+      retries: 2
+    volumes:
+      - ./backend:/backend
+    depends_on:
+      - db
+      - redis
+    command: celery --app celery_conf:app worker -l info -B
+
+  flower:
+    image: backend
+    restart: on-failure
+    env_file: .env
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/backend
+    depends_on:
+      - db
+      - redis
+    command: celery --app celery_conf:app flower
+
+  nginx:
+    restart: always
+    image: library/nginx:1.9.0
+    expose:
+      - 8081
+    volumes:
+      - ./docker/nginx:/etc/nginx/conf.d
+      - ./docker/logs/nginx:/var/log/nginx
+      - ./backend:/backend
+
